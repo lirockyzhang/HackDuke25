@@ -4,6 +4,9 @@ TTS Engine Module
 This module provides text-to-speech functionality using Coqui TTS.
 It handles model initialization, audio synthesis, and queue management
 for sequential playback of text chunks.
+
+Dev Plan:
+Fix the interrupt function to allow for immediate speech synthesis
 """
 
 import os
@@ -202,7 +205,7 @@ class TTSEngine:
         if not self.is_initialized:
             self.last_error = "TTS Engine not initialized"
             return False
-            
+        
         return self._synthesize_and_play(text)
 
     def clear_queue(self):
