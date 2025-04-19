@@ -3,5 +3,29 @@ name = "hackduke"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = [
+    "customtkinter>=5.2.2",
+    "fastapi[all]>=0.115.12",
+    "langchain>=0.3.23",
+    "langchain-google-genai>=2.0.10",
+    "pyaudio>=0.2.14",
+    "pydub>=0.25.1",
+    "python-dotenv>=1.1.0",
+    "sounddevice>=0.5.1",
+    "torch>=2.5.1",
+    "torchvision>=0.20.1",
+    "tts>=0.22.0",
+    "uvicorn>=0.34.2",
+]
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
