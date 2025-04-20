@@ -39,7 +39,7 @@ class TTSEngine:
     - Speech completion tracking
     """
     
-    def __init__(self, model_name="tts_models/en/ljspeech/tacotron2-DDC", device=None, 
+    def __init__(self, model_name="tts_models/multilingual/multi-dataset/xtts_v2", device=None, 
                  callback_on_chunk_start=None, callback_on_chunk_end=None,
                  callback_on_speech_complete=None):
         """
