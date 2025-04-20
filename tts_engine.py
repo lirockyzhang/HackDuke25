@@ -6,6 +6,7 @@ It handles model initialization, audio synthesis, and queue management
 for sequential playback of text chunks.
 
 Dev Plan:
+Return response on what I said back with speak_text()
 Fix the interrupt function to allow for immediate speech synthesis
 """
 
@@ -17,7 +18,6 @@ import re
 from pydub import AudioSegment
 from pydub.playback import play as play_with_pydub
 import torch
-import tempfile
 
 # Try to import TTS, but handle import errors gracefully
 try:
@@ -36,10 +36,12 @@ class TTSEngine:
     - Text chunking by punctuation
     - Queued playback with a dedicated worker thread
     - Error reporting
+    - Speech completion tracking
     """
     
     def __init__(self, model_name="tts_models/en/ljspeech/tacotron2-DDC", device=None, 
-                 callback_on_chunk_start=None, callback_on_chunk_end=None):
+                 callback_on_chunk_start=None, callback_on_chunk_end=None,
+                 callback_on_speech_complete=None):
         """
         Initialize the TTS Engine.
         
@@ -48,6 +50,7 @@ class TTSEngine:
             device: 'cuda' or 'cpu' (None for auto-detection)
             callback_on_chunk_start: Function to call when starting a chunk
             callback_on_chunk_end: Function to call when ending a chunk
+            callback_on_speech_complete: Function to call when speech is complete or interrupted
         """
         self.model_name = model_name
         self.model = None
@@ -64,12 +67,19 @@ class TTSEngine:
         # UI Callback functions
         self.callback_on_chunk_start = callback_on_chunk_start
         self.callback_on_chunk_end = callback_on_chunk_end
+        self.callback_on_speech_complete = callback_on_speech_complete
         
         # Playback queue and thread control
         self.tts_queue = queue.Queue()
         self.thread_should_run = threading.Event()
         self.thread_should_run.set()
         self.playback_thread = None
+        
+        # Speech tracking
+        self.current_speech_id = None
+        self.current_chunks = []
+        self.spoken_chunks = []
+        self.speech_interrupted = False
         
         # Initialize the model if TTS is available
         if self.tts_available:
@@ -121,6 +131,18 @@ class TTSEngine:
             if chunk is None:
                 break  # Shutdown signal
                 
+            if chunk == "__END_OF_SPEECH__":
+                # Special marker to indicate end of speech
+                if self.callback_on_speech_complete and self.current_speech_id:
+                    # Get the actually spoken text
+                    spoken_text = " ".join(self.spoken_chunks)
+                    if self.speech_interrupted:
+                        spoken_text += " <|interrupt|>"
+                    self.callback_on_speech_complete(spoken_text)
+                # Reset for next speech
+                self.current_speech_id = None
+                continue
+                
             try:
                 # Notify UI about chunk start
                 if self.callback_on_chunk_start:
@@ -128,9 +150,25 @@ class TTSEngine:
                 
                 # Synthesize and play the chunk
                 self._synthesize_and_play(chunk)
+                
+                # Track spoken chunks
+                self.spoken_chunks.append(chunk)
+                
             except Exception as e:
                 self.last_error = f"TTS error: {str(e)}"
                 print(self.last_error)
+                # Mark as interrupted on error
+                self.speech_interrupted = True
+                
+                # Call completion callback with what was spoken so far
+                if self.callback_on_speech_complete and self.current_speech_id:
+                    spoken_text = " ".join(self.spoken_chunks)
+                    if self.speech_interrupted:
+                        spoken_text += " <|interrupt|>"
+                    self.callback_on_speech_complete(spoken_text)
+                    
+                # Reset for next speech
+                self.current_speech_id = None
                 break  # Stop queue on error
             finally:
                 # Notify UI about chunk end
@@ -158,15 +196,16 @@ class TTSEngine:
     def chunk_text(self, text):
         """Split text into chunks by punctuation (. ; ! ?) and ensure each chunk has at least one word."""
         # Split on punctuation followed by whitespace or end of string
-        chunks = re.findall(r'[^.;!?]*\w[^.;!?]*[.;!?]', text)
+        chunks = re.findall(r'[^.,;!?]*\w[^.,;!?]*[.,;!?]', text)
         return [chunk.strip() for chunk in chunks if chunk.strip()]
 
-    def speak_text(self, text):
+    def speak_text(self, text, callback_on_this_speech_complete=None):
         """
         Queue text to be spoken.
         
         Args:
             text: The text to be spoken.
+            callback_on_this_speech_complete: A one-time callback for this specific speech
             
         Returns:
             bool: True if text was queued successfully, False otherwise.
@@ -181,12 +220,52 @@ class TTSEngine:
             if not chunks:
                 chunks = [text]  # If no punctuation, use the whole text as one chunk
                 
+            # If there's speech in progress, mark it as interrupted
+            if self.current_speech_id:
+                self.speech_interrupted = True
+                # Signal interruption to any existing callback
+                if self.callback_on_speech_complete:
+                    spoken_text = " ".join(self.spoken_chunks)
+                    self.callback_on_speech_complete(spoken_text + " <|interrupt|>")
+                
             # Clear the queue if there are items
             self.clear_queue()
                 
+            # Set up tracking for the new speech
+            self.current_speech_id = id(text)
+            self.current_chunks = chunks.copy()
+            self.spoken_chunks = []
+            self.speech_interrupted = False
+            
+            # Store any one-time callback for this specific speech
+            one_time_callback = callback_on_this_speech_complete
+            
             # Add chunks to the queue
             for chunk in chunks:
                 self.tts_queue.put(chunk)
+                
+            # Add end marker to signal completion
+            self.tts_queue.put("__END_OF_SPEECH__")
+            
+            # If there's a one-time callback, set it up to execute when this speech completes
+            if one_time_callback:
+                original_callback = self.callback_on_speech_complete
+                
+                def combined_callback(spoken_text):
+                    # Call the one-time callback
+                    if one_time_callback:
+                        one_time_callback(spoken_text)
+                    
+                    # Restore the original callback
+                    self.callback_on_speech_complete = original_callback
+                    
+                    # Call the original callback if it exists
+                    if original_callback:
+                        original_callback(spoken_text)
+                
+                # Set the combined callback
+                self.callback_on_speech_complete = combined_callback
+                
             return True
         except Exception as e:
             self.last_error = f"Error queuing text for TTS: {str(e)}"
@@ -209,7 +288,19 @@ class TTSEngine:
         return self._synthesize_and_play(text)
 
     def clear_queue(self):
-        """Clear all pending items from the queue."""
+        """
+        Clear all pending items from the queue.
+        If speech is in progress, this will mark it as interrupted.
+        """
+        # Mark as interrupted if speech is in progress
+        if self.current_speech_id and not self.speech_interrupted:
+            self.speech_interrupted = True
+            # Signal interruption to callback if it exists
+            if self.callback_on_speech_complete:
+                spoken_text = " ".join(self.spoken_chunks)
+                self.callback_on_speech_complete(spoken_text + " <|interrupt|>")
+            
+        # Clear the queue
         while not self.tts_queue.empty():
             try:
                 self.tts_queue.get_nowait()
