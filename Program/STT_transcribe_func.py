@@ -49,34 +49,49 @@ def extract_new_segment(previous, current):
     new_words = curr_original[max_overlap:]
     return ' '.join(new_words)
 
-# === Thread-safe transcription task for streaming audio ===
-def transcribe_task(curr_file, transcript_queue):
+# === Thread‑safe transcription task for streaming audio ===
+def transcribe_task(curr_file: str, transcript_queue: "queue.Queue[str]"):
+    """
+    • Ensures returned_transcript never becomes "".
+    • Pushes exactly one item to transcript_queue every call.
+    • Safely removes the temp file.
+    """
+    returned_transcript = "<silence>"          # <- hard‑safety default
+    curr_transcript     = "<silence>"          #    (updated below)
+
     try:
-        # 1. Get current transcript or silent marker
-        if is_silence(curr_file):
-            curr_transcript = "<silence>"
-        else:
+        # -------- 1. Get current transcript (or silence marker) --------
+        if not is_silence(curr_file):          # we only call STT if audio isn’t silent
             text = transcribe_file(curr_file).strip()
-            curr_transcript = text if text and is_english(text) else "<silence>"
+            if text and is_english(text):      # drop non‑English / garbage
+                curr_transcript = text
 
-        # 2. Decide what to return
-        prev = state.prev_transcript
-        if prev is None or prev.startswith("<silence>"):
-            returned_transcript = curr_transcript
-            print("🗣️ Transcript:", returned_transcript)
-        else:
+        # -------- 2. Decide what to return --------
+        prev = getattr(state, "prev_transcript", None)
+
+        if prev and not prev.startswith("<silence>"):
+            # We had real speech last time → return only the new tail
             new_segment = extract_new_segment(prev, curr_transcript)
-            returned_transcript = new_segment
-            print("🗣️ Transcript:", returned_transcript)
+            returned_transcript = new_segment or "<silence>"
+        else:
+            # First chunk or we were in silence → pass the whole thing
+            returned_transcript = curr_transcript or "<silence>"
 
-        # 3. Update state and queue result
+        # -------- 3. Update state --------
         state.prev_transcript = curr_transcript
-        transcript_queue.put(returned_transcript)
-
-        # 4. Cleanup
-        os.remove(curr_file)
 
     except Exception as e:
+        # Any failure still yields "<silence>" instead of blocking/blank
         print("⚠️ Error during transcription:", e)
-        transcript_queue.put(None)  # Prevent blocking the consumer
+        state.prev_transcript = "<silence>"
+
+    finally:
+        # Always push one (non‑blank) result
+        transcript_queue.put(returned_transcript)
+
+        # Cleanup temp file, ignore if already gone
+        try:
+            os.remove(curr_file)
+        except FileNotFoundError:
+            pass
 

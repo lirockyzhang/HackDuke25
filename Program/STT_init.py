@@ -10,28 +10,31 @@ from STT_config import (
     CHUNKS_PER_WINDOW,
 )
 
-def initialize_listener():
+# STT_init.py
+import time, collections, pyaudio
+from STT_config import CHUNK, WINDOW_LENGTH_SECONDS          # your existing constants
+
+def initialize_listener(*, rate: int = 16_000, channels: int = 1,
+                        pa: pyaudio.PyAudio | None = None):
     """
-    Initializes the PyAudio stream and audio buffer for real-time speech capture.
-    
-    Returns:
-        stream (pyaudio.Stream): The open PyAudio stream.
-        audio_buffer (deque): Rolling buffer for audio chunks.
-        start_time (float): Timestamp when recording began.
-        saved_second (int): Initialized counter for saved intervals.
-        pa (pyaudio.PyAudio): The PyAudio instance (must be terminated at the end).
+    Open a fresh *input* stream and return everything the caller needs.
+
+    Returns
+    -------
+    stream, audio_buffer, start_time, saved_second, pa
     """
-    pa = pyaudio.PyAudio()
-    stream = pa.open(format=FORMAT,
-                     channels=CHANNELS,
-                     rate=RATE,
+    pa = pa or pyaudio.PyAudio()      # create once, reuse forever
+
+    stream = pa.open(format=pyaudio.paInt16,
+                     channels=channels,
+                     rate=rate,
                      input=True,
                      frames_per_buffer=CHUNK)
 
-    audio_buffer = deque(maxlen=CHUNKS_PER_WINDOW)
-    start_time = time.time()
-    saved_second = 0
+    audio_buffer = collections.deque(
+        maxlen=int(rate * WINDOW_LENGTH_SECONDS * 2)  # 2 bytes/sample
+    )
 
-    print("🎙️ Listening...")
-
+    start_time   = time.time()
+    saved_second = 0                  # handy if you still track this elsewhere
     return stream, audio_buffer, start_time, saved_second, pa

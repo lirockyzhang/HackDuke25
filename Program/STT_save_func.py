@@ -12,13 +12,13 @@ def save_audio_snapshot(current_second: int, audio_buffer: deque) -> str:
 
 # === Determine if it's time to save ===
 def should_save_snapshot(elapsed_time: float, last_saved_second: int,
-                         window_length: int = 5, save_interval: int = 1) -> bool:
+                         window_length, save_interval) -> bool:
     """
     Return True if the current elapsed time meets the conditions for saving a snapshot.
     """
     current_second = int(elapsed_time)
     return (
-        elapsed_time >= window_length and
+        elapsed_time >= 3 and
         current_second % save_interval == 0 and
         current_second != last_saved_second
     )

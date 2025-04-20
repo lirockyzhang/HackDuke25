@@ -1,10 +1,11 @@
 from BRAIN_llm_init import llama_slow as llm
 from BRAIN_langchain import combined_memory, memory_chain
-from TTS_speaker import say
 
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from BRAIN_llm_init import llama_slow as interrupt_llm
+import tts_engine
+
 
 def think_about_what_to_say(history, interrupt_way):
 
@@ -15,7 +16,7 @@ def think_about_what_to_say(history, interrupt_way):
             "Output only that word with no extra text."
         )
         interjection = llm.predict(prompt).strip()
-        say(interjection)
+        tts_engine.tts_engine.speak_text(interjection)
         return
 
     # Otherwise, proceed with full response
@@ -23,8 +24,6 @@ def think_about_what_to_say(history, interrupt_way):
 
 
 def respond(history):
-
-    print('Need a full response.')
 
     user_input = history
     
@@ -35,7 +34,7 @@ def respond(history):
     response_text = memory_chain.predict(input=user_input, **mem_vars)
 
     # 3) play audio and get the final string
-    say(response_text)
+    tts_engine.tts_engine.speak_immediately(response_text)
 
     actual_output = response_text
 
@@ -44,8 +43,6 @@ def respond(history):
         {"input": user_input},
         {"output": actual_output}
     )
-
-    print('Just saved response to memory.')
 
     return 0
 
@@ -60,11 +57,18 @@ interrupt_prompt = PromptTemplate.from_template(
 # Wrap in an LLMChain
 interrupt_chain = LLMChain(llm=interrupt_llm, prompt=interrupt_prompt)
 
-# Define the function
 def interrupt(context: str):
-    if context.strip().endswith("<silence> <silence> <silence>"):
+    context = context.strip()
+    
+    if context == "" or context.endswith("<silence> <silence>"):
         return "True"
-    response = interrupt_chain.run(context=context).strip()
+    
+    try:
+        response = interrupt_chain.run(context=context).strip()
+    except Exception as e:
+        return "False"
+
     if response not in {"True", "False", "Interjection"}:
         return "False"  # fallback for malformed response
+
     return response
