@@ -27,6 +27,7 @@ except ImportError:
     TTS_AVAILABLE = False
     print("WARNING: Coqui TTS not available - TTS features will be disabled")
 
+SPEAKER_WAV = ["voice/female.wav", "voice/2021-12-29.wav", "voice/2021-12-30.wav", "voice/2022-1-1.wav", "voice/2022-1-2.wav", "voice/2022-1-3.wav", "voice/2022-1-4.wav"]  # voice/female.wav
 class TTSEngine:
     """
     Text-to-Speech Engine using Coqui TTS.
@@ -39,7 +40,8 @@ class TTSEngine:
     - Speech completion tracking
     """
     
-    def __init__(self, model_name="tts_models/multilingual/multi-dataset/xtts_v2", device=None, 
+    def __init__(self, model_name="tts_models/multilingual/multi-dataset/xtts_v2", device=None,
+                 speaker_wav=None, # Add speaker_wav parameter
                  callback_on_chunk_start=None, callback_on_chunk_end=None,
                  callback_on_speech_complete=None):
         """
@@ -48,6 +50,7 @@ class TTSEngine:
         Args:
             model_name: Coqui TTS model name to use
             device: 'cuda' or 'cpu' (None for auto-detection)
+            speaker_wav: Path to the reference speaker WAV file (required for multi-speaker models like XTTS)
             callback_on_chunk_start: Function to call when starting a chunk
             callback_on_chunk_end: Function to call when ending a chunk
             callback_on_speech_complete: Function to call when speech is complete or interrupted
@@ -57,6 +60,7 @@ class TTSEngine:
         self.tts_available = TTS_AVAILABLE
         self.last_error = None
         self.is_initialized = False
+        self.speaker_wav = speaker_wav # Store speaker_wav path
         
         # Set device if provided, otherwise auto-detect
         if device is None:
@@ -80,7 +84,15 @@ class TTSEngine:
         self.current_chunks = []
         self.spoken_chunks = []
         self.speech_interrupted = False
-        
+
+        # Check if speaker_wav is provided for XTTS model
+        if "xtts" in model_name and not speaker_wav:
+             print("WARNING: XTTS model selected, but no speaker_wav provided. Synthesis might fail.")
+             # You might want to raise an error or use a default speaker wav here
+             # For now, we'll proceed but log a warning.
+             # Example: self.speaker_wav = "path/to/default/speaker.wav"
+             # Or: raise ValueError("speaker_wav must be provided for XTTS models")
+
         # Initialize the model if TTS is available
         if self.tts_available:
             self._initialize_model()
@@ -183,7 +195,13 @@ class TTSEngine:
         try:
             # Synthesize to a BytesIO buffer in memory
             buf = io.BytesIO()
-            self.model.tts_to_file(text=str(text), file_path=buf)
+            # Pass the speaker_wav argument
+            self.model.tts_to_file(
+                text=str(text),
+                file_path=buf,
+                speaker_wav=self.speaker_wav, # Add this line
+                language="en" # XTTS requires language, adjust if needed
+            )
             buf.seek(0)
             sound = AudioSegment.from_file(buf, format="wav")
             play_with_pydub(sound)
@@ -191,12 +209,29 @@ class TTSEngine:
         except Exception as e:
             self.last_error = f"TTS synthesis error: {str(e)}"
             print(self.last_error)
+            # Print traceback for more details during debugging
+            import traceback
+            traceback.print_exc()
             return False
 
     def chunk_text(self, text):
         """Split text into chunks by punctuation (. ; ! ?) and ensure each chunk has at least one word."""
         # Split on punctuation followed by whitespace or end of string
         chunks = re.findall(r'[^.,;!?]*\w[^.,;!?]*[.,;!?]', text)
+        # Merge chunks to ensure each has at least 10 spaces (i.e., 11 words or so)
+        merged_chunks = []
+        buffer = ""
+        for chunk in chunks:
+            if buffer:
+                buffer += " " + chunk
+            else:
+                buffer = chunk
+            if buffer.count(" ") >= 10:
+                merged_chunks.append(buffer.strip())
+                buffer = ""
+        if buffer.strip():
+            merged_chunks.append(buffer.strip())
+        chunks = merged_chunks
         return [chunk.strip() for chunk in chunks if chunk.strip()]
 
     def speak_text(self, text, callback_on_this_speech_complete=None):
@@ -326,11 +361,16 @@ class TTSEngine:
 # Create a global instance for easy import
 tts_engine = None
 
-def initialize():
+# Update initialize to accept speaker_wav
+def initialize(speaker_wav): # Add speaker_wav parameter
     """Initialize the global TTS engine instance."""
     global tts_engine
-    tts_engine = TTSEngine()
+    # Pass speaker_wav to the constructor
+    tts_engine = TTSEngine(speaker_wav=speaker_wav)
     return tts_engine.is_ready()
 
 # Initialize the engine when module is imported
-initialize()
+# You'll need to provide a path to a speaker wav file here
+# For example: initialize(speaker_wav="path/to/your/speaker.wav")
+# If you don't provide one, the warning in __init__ will be printed.
+initialize(SPEAKER_WAV) # Consider adding a default path or handling the missing path
