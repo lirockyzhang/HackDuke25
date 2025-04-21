@@ -27,7 +27,8 @@ except ImportError:
     TTS_AVAILABLE = False
     print("WARNING: Coqui TTS not available - TTS features will be disabled")
 
-SPEAKER_WAV = ["voice/female.wav", "voice/2021-12-29.wav", "voice/2021-12-30.wav", "voice/2022-1-1.wav", "voice/2022-1-2.wav", "voice/2022-1-3.wav", "voice/2022-1-4.wav"]  # voice/female.wav
+SPEAKER_WAV = ["voice/female.wav", "voice/29.wav", "voice/30.wav", "voice/1.wav", "voice/2.wav", "voice/3.wav", "voice/4.wav"]  # voice/female.wav
+
 class TTSEngine:
     """
     Text-to-Speech Engine using Coqui TTS.
@@ -132,61 +133,6 @@ class TTSEngine:
             self.playback_thread.start()
             print("TTS playback thread started")
 
-    def _playback_worker(self):
-        """Worker thread that processes the TTS queue."""
-        while self.thread_should_run.is_set():
-            try:
-                chunk = self.tts_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-                
-            if chunk is None:
-                break  # Shutdown signal
-                
-            if chunk == "__END_OF_SPEECH__":
-                # Special marker to indicate end of speech
-                if self.callback_on_speech_complete and self.current_speech_id:
-                    # Get the actually spoken text
-                    spoken_text = " ".join(self.spoken_chunks)
-                    if self.speech_interrupted:
-                        spoken_text += " <|interrupt|>"
-                    self.callback_on_speech_complete(spoken_text)
-                # Reset for next speech
-                self.current_speech_id = None
-                continue
-                
-            try:
-                # Notify UI about chunk start
-                if self.callback_on_chunk_start:
-                    self.callback_on_chunk_start(chunk)
-                
-                # Synthesize and play the chunk
-                self._synthesize_and_play(chunk)
-                
-                # Track spoken chunks
-                self.spoken_chunks.append(chunk)
-                
-            except Exception as e:
-                self.last_error = f"TTS error: {str(e)}"
-                print(self.last_error)
-                # Mark as interrupted on error
-                self.speech_interrupted = True
-                
-                # Call completion callback with what was spoken so far
-                if self.callback_on_speech_complete and self.current_speech_id:
-                    spoken_text = " ".join(self.spoken_chunks)
-                    if self.speech_interrupted:
-                        spoken_text += " <|interrupt|>"
-                    self.callback_on_speech_complete(spoken_text)
-                    
-                # Reset for next speech
-                self.current_speech_id = None
-                break  # Stop queue on error
-            finally:
-                # Notify UI about chunk end
-                if self.callback_on_chunk_end:
-                    self.callback_on_chunk_end(chunk)
-
     def _synthesize_and_play(self, text):
         """Synthesize text to speech and play it."""
         if not self.is_initialized or not text or not str(text).strip():
@@ -233,28 +179,28 @@ class TTSEngine:
             merged_chunks.append(buffer.strip())
         chunks = merged_chunks
         return [chunk.strip() for chunk in chunks if chunk.strip()]
-
+    
     def speak_text(self, text, callback_on_this_speech_complete=None):
         """
         Queue text to be spoken.
-        
+
         Args:
             text: The text to be spoken.
             callback_on_this_speech_complete: A one-time callback for this specific speech
-            
+
         Returns:
             bool: True if text was queued successfully, False otherwise.
         """
         if not self.is_initialized:
             self.last_error = "TTS Engine not initialized"
             return False
-            
+
         try:
             # Split text into chunks by punctuation
             chunks = self.chunk_text(text)
             if not chunks:
                 chunks = [text]  # If no punctuation, use the whole text as one chunk
-                
+
             # If there's speech in progress, mark it as interrupted
             if self.current_speech_id:
                 self.speech_interrupted = True
@@ -262,66 +208,152 @@ class TTSEngine:
                 if self.callback_on_speech_complete:
                     spoken_text = " ".join(self.spoken_chunks)
                     self.callback_on_speech_complete(spoken_text + " <|interrupt|>")
-                
+
             # Clear the queue if there are items
             self.clear_queue()
-                
+
             # Set up tracking for the new speech
             self.current_speech_id = id(text)
             self.current_chunks = chunks.copy()
             self.spoken_chunks = []
             self.speech_interrupted = False
-            
+
             # Store any one-time callback for this specific speech
             one_time_callback = callback_on_this_speech_complete
-            
-            # Add chunks to the queue
+
+            # Synthesize audio for each chunk and queue (chunk, audio_data)
             for chunk in chunks:
-                self.tts_queue.put(chunk)
-                
+                audio_data = self._synthesize_to_audiosegment(chunk)
+                if audio_data is not None:
+                    self.tts_queue.put((chunk, audio_data))
+                else:
+                    # If synthesis fails, skip this chunk
+                    continue
+
             # Add end marker to signal completion
             self.tts_queue.put("__END_OF_SPEECH__")
-            
+
             # If there's a one-time callback, set it up to execute when this speech completes
             if one_time_callback:
                 original_callback = self.callback_on_speech_complete
-                
+
                 def combined_callback(spoken_text):
                     # Call the one-time callback
                     if one_time_callback:
                         one_time_callback(spoken_text)
-                    
+
                     # Restore the original callback
                     self.callback_on_speech_complete = original_callback
-                    
+
                     # Call the original callback if it exists
                     if original_callback:
                         original_callback(spoken_text)
-                
+
                 # Set the combined callback
                 self.callback_on_speech_complete = combined_callback
-                
+
             return True
         except Exception as e:
             self.last_error = f"Error queuing text for TTS: {str(e)}"
             return False
 
-    def speak_immediately(self, text):
-        """
-        Speak text immediately without queuing.
-        
-        Args:
-            text: The text to be spoken.
-            
-        Returns:
-            bool: True if synthesis and playback was successful, False otherwise.
-        """
-        if not self.is_initialized:
-            self.last_error = "TTS Engine not initialized"
-            return False
-        
-        return self._synthesize_and_play(text)
+    def _synthesize_to_audiosegment(self, text):
+        """Synthesize text to speech and return an AudioSegment."""
+        if not self.is_initialized or not text or not str(text).strip():
+            return None
 
+        try:
+            buf = io.BytesIO()
+            self.model.tts_to_file(
+                text=str(text),
+                file_path=buf,
+                speaker_wav=self.speaker_wav,  # <-- use 'speaker' not 'speaker_wav'
+                language="en"
+            )
+            buf.seek(0)
+            sound = AudioSegment.from_file(buf, format="wav")
+            return sound
+        except Exception as e:
+            self.last_error = f"TTS synthesis error: {str(e)}"
+            print(self.last_error)
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _playback_worker(self):
+        """Worker thread that processes the TTS queue and plays audio."""
+        while self.thread_should_run.is_set():
+            try:
+                item = self.tts_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if item is None:
+                break  # Shutdown signal
+
+            if item == "__END_OF_SPEECH__":
+                # Special marker to indicate end of speech
+                if self.callback_on_speech_complete and self.current_speech_id:
+                    spoken_text = " ".join(self.spoken_chunks)
+                    if self.speech_interrupted:
+                        spoken_text += " <|interrupt|>"
+                    self.callback_on_speech_complete(spoken_text)
+                self.current_speech_id = None
+                continue
+
+            chunk, audio_data = item
+
+            try:
+                # Notify UI about chunk start
+                if self.callback_on_chunk_start:
+                    self.callback_on_chunk_start(chunk)
+
+                # Play the audio data
+                play_with_pydub(audio_data)
+
+                # Track spoken chunks
+                self.spoken_chunks.append(chunk)
+
+            except Exception as e:
+                self.last_error = f"TTS error: {str(e)}"
+                print(self.last_error)
+                self.speech_interrupted = True
+
+                if self.callback_on_speech_complete and self.current_speech_id:
+                    spoken_text = " ".join(self.spoken_chunks)
+                    if self.speech_interrupted:
+                        spoken_text += " <|interrupt|>"
+                    self.callback_on_speech_complete(spoken_text)
+
+                self.current_speech_id = None
+                break  # Stop queue on error
+            finally:
+                # Notify UI about chunk end
+                if self.callback_on_chunk_end:
+                    self.callback_on_chunk_end(chunk)
+
+    def speak_immediately(self, text):
+            """
+            Speak text immediately without queuing.
+    
+            Args:
+                text: The text to be spoken.
+    
+            Returns:
+                bool: True if synthesis and playback was successful, False otherwise.
+            """
+            if not self.is_initialized:
+                self.last_error = "TTS Engine not initialized"
+                return False
+    
+            audio_data = self._synthesize_to_audiosegment(text)
+            if audio_data is not None:
+                play_with_pydub(audio_data)
+                return True
+            else:
+                return False
+    
+    # ...rest of the code unchanged...
     def clear_queue(self):
         """
         Clear all pending items from the queue.

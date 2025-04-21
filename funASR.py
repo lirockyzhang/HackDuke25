@@ -5,26 +5,30 @@ import sounddevice as sd
 import numpy as np
 import sys
 import traceback
-import time # To add slight delay if needed
+import os
 
 # --- Configuration ---
+cwd = os.getcwd()
 TARGET_SAMPLE_RATE = 16000 # Sample rate expected by the models
-VAD_MODEL_NAME = "fsmn-vad" # VAD model for endpointing
-ASR_MODEL_DIR = "iic/SenseVoiceSmall" # ASR model for processing segments
-ASR_DEVICE = "cuda:0" # Device for the ASR model ("cuda:0" or "cpu")
-VAD_CHUNK_SIZE_MS = 500 # VAD model processing chunk size in milliseconds (used for reading mic)
+VAD_MODEL_NAME = 'fsmn-vad' # VAD model for endpointing
+VAD_MODEL_PATH = cwd+'/stt/speech_fsmn_vad_zh-cn-16k-common-pytorch/' # VAD model for endpointing
+ASR_MODEL_NAME = 'iic/SenseVoiceSmall' # ASR model for processing segments
+ASR_MODEL_PATH = cwd+'/stt/SenseVoiceSmall/'
+ASR_DEVICE = "cuda:0" # Device for ASR model
+VAD_CHUNK_SIZE_MS = 200 # VAD model processing chunk size in milliseconds (used for reading mic)
 
 # ASR processing parameters (from example)
-ASR_LANGUAGE = "en" # Or specify "en", "zh", etc.
+ASR_LANGUAGE = "auto" # Or specify "en", "zh", etc.
 ASR_USE_ITN = True
 ASR_BATCH_SIZE_S = 60 # Might be less relevant for single segments
 ASR_MERGE_VAD = True # Use ASR's internal VAD for merging/cleanup within segment
 ASR_MERGE_LENGTH_S = 15 # Might be less relevant for single segments
 
 # --- Initialize Models ---
-print(f"Initializing VAD model: {VAD_MODEL_NAME}...")
+print(f"Initializing VAD model: {VAD_MODEL_NAME} at path {VAD_MODEL_NAME}...")
 try:
-    vad_model = AutoModel(model=VAD_MODEL_NAME,
+    vad_model = AutoModel(model=VAD_MODEL_PATH,
+                        #   model_path=VAD_MODEL_PATH,
                           disable_update=True,
                           disable_pbar=True)
     print("VAD model initialized.")
@@ -33,9 +37,10 @@ except Exception as e:
     traceback.print_exc()
     exit()
 
-print(f"Initializing ASR model: {ASR_MODEL_DIR} on device {ASR_DEVICE}...")
+print(f"Initializing ASR model: {ASR_MODEL_NAME} on device {ASR_DEVICE}...")
 try:
-    asr_model = AutoModel(model=ASR_MODEL_DIR,
+    asr_model = AutoModel(model=ASR_MODEL_PATH,
+                        #   model_path=ASR_MODEL_PATH,
                           device=ASR_DEVICE,
                           disable_update=True,
                           disable_pbar=True)
@@ -76,12 +81,11 @@ try:
         cache_vad={}
         cache_asr={}
         while True:
-            if not vad_startpoint_detected or vad_endpoint_detected:
+            if (not vad_startpoint_detected or vad_endpoint_detected) and len(audio_buffer) > 1: #To catch the start of the speech
                 audio_buffer = [] # Reset buffer if no speech detected or endpoint reached
                 vad_endpoint_detected = False
                 cache_vad={}
-
-            if len(audio_buffer) > 0:
+            if len(audio_buffer) > 2:
                 print(f"Buffer Length: {len(audio_buffer)} chunks ({len(audio_buffer) * vad_block_size / TARGET_SAMPLE_RATE:.2f}s)")
             # 1. Read audio chunk from microphone
             audio_chunk, overflowed = stream.read(vad_block_size)
@@ -114,7 +118,7 @@ try:
                 # This needs validation and might require more complex checking
                 # (e.g., comparing end timestamp in 'value' to buffer length).
                 if "value" in vad_res[0] and vad_res[0]['value']: # vad_res and isinstance(vad_res, list) and len(vad_res) > 0 and
-                    print(f"VAD value list: {vad_res[0]['value']}")
+                    print(f"VAD value list: {vad_res[0]['value'][0]}")
                     beg, end = vad_res[0]["value"][0]
                     if not vad_startpoint_detected and beg >= 0:
                         vad_startpoint_detected = True
@@ -132,7 +136,6 @@ try:
             if vad_startpoint_detected and vad_endpoint_detected and audio_buffer: # Ensure buffer isn't empty
                 # print(f"\n[VAD Endpoint Detected. Processing {len(accumulated_audio)/TARGET_SAMPLE_RATE:.2f}s segment...]")
                 segment_audio_to_process = accumulated_audio # Process the whole buffer
-                audio_buffer = [] # Clear buffer for next segment
                 print(f"Processing {len(segment_audio_to_process)/TARGET_SAMPLE_RATE:.2f}s segment...")
                 # 7. Process the complete segment with the ASR model
                 try:
@@ -156,6 +159,7 @@ try:
                     # Clear cache
                     cache_vad={}
                     cache_asr={}
+                    audio_buffer = [] # Clear buffer after processing
 
 
                 except Exception as e_asr:
