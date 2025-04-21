@@ -1,5 +1,6 @@
 # Sama-AI
 An all-time accessible AI-powered soul mate within your reach
+
 **Team #3 Project** for HackDuke x Meta 2025 Hackathon 
 
 Description:
@@ -13,3 +14,8 @@ Inspired by the liveliness of popular AI Twitch streamer Neuro Sama, which has a
 Right now, we're focused on improving Sama's voice to sound even more vibrant and expressive through advanced text-to-speech models, reducing interaction latency further, and enabling natural conversational dynamics where Sama can seamlessly interrupt or be interrupted—just like in real human interactions.
 
 In the near future, we're excited to give Sama a visible presence right on your desktop and empower her with screen-reading capabilities. Eventually, we envision Sama becoming a constant and delightful companion who actively participates in your digital life, creating a richer, more enjoyable interactive experience.
+
+
+# Settings
+## Ollama
+In cmd `set OLLAMA_FLASH_ATTENTION=1`
