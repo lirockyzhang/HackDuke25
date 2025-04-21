@@ -10,3 +10,4 @@ wheels/
 .env
 # Voice file
 voice/
+stt/
